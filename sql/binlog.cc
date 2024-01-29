@@ -3574,7 +3574,7 @@ static bool is_number(const char *str,
     nonzero if not possible to get unique filename.
 */
 
-static int find_uniq_filename(char *name)
+static int find_uniq_filename(char *name, std::pair<ulong, ulong> *max_cur_index_number = NULL)
 {
   uint                  i;
   char                  buff[FN_REFLEN], ext_buf[FN_REFLEN];
@@ -3593,22 +3593,25 @@ static int find_uniq_filename(char *name)
   *end='.';
   length= (size_t) (end - start + 1);
 
-  if ((DBUG_EVALUATE_IF("error_unique_log_filename", 1, 
-      !(dir_info= my_dir(buff,MYF(MY_DONT_SORT))))))
-  {						// This shouldn't happen
-    my_stpcpy(end,".1");				// use name+1
-    DBUG_RETURN(1);
-  }
-  file_info= dir_info->dir_entry;
-  for (i= dir_info->number_off_files ; i-- ; file_info++)
-  {
-    if (strncmp(file_info->name, start, length) == 0 &&
-	is_number(file_info->name+length, &number,0))
-    {
-      set_if_bigger(max_found, number);
+  if (max_cur_index_number && max_cur_index_number->first) {
+    max_found = max_cur_index_number->first;
+  } else {
+    if ((DBUG_EVALUATE_IF(
+        "error_unique_log_filename", 1,
+        !(dir_info = my_dir(
+            buff, MYF(MY_DONT_SORT)))))) {  // This shouldn't happen
+      my_stpcpy(end, ".1");                       // use name+1
+      return 1;
     }
+    file_info = dir_info->dir_entry;
+    for (i = dir_info->number_off_files; i--; file_info++) {
+      if (strncmp(file_info->name, start, length) == 0 &&
+          is_number(file_info->name + length, &number, false)) {
+        max_found = std::max(max_found, number);
+      }
+    } 
+    my_dirend(dir_info);
   }
-  my_dirend(dir_info);
 
   /* check if reached the maximum possible extension number */
   if (max_found == MAX_LOG_UNIQUE_FN_EXT)
@@ -3653,7 +3656,7 @@ index files.", name, ext_buf, (strlen(ext_buf) + (end - name)));
     sql_print_warning("Next log extension: %lu. \
 Remaining log filename extensions: %lu. \
 Please consider archiving some logs.", next, (MAX_LOG_UNIQUE_FN_EXT - next));
-
+  if (max_cur_index_number) max_cur_index_number->second = next;
 end:
   DBUG_RETURN(error);
 }
@@ -3664,7 +3667,7 @@ int MYSQL_BIN_LOG::generate_new_name(char *new_name, const char *log_name)
   fn_format(new_name, log_name, mysql_data_home, "", 4);
   if (!fn_ext(log_name)[0])
   {
-    if (find_uniq_filename(new_name))
+    if (find_uniq_filename(new_name, &max_cur_index_number))
     {
       my_printf_error(ER_NO_UNIQUE_LOGFILE, ER(ER_NO_UNIQUE_LOGFILE),
                       MYF(ME_FATALERROR), log_name);
@@ -5243,6 +5246,9 @@ bool MYSQL_BIN_LOG::open_binlog(const char *log_name,
   }
 
   log_state.atomic_set(LOG_OPENED);
+
+  max_cur_index_number.first = max_cur_index_number.second;
+
   /*
     At every rotate memorize the last transaction counter state to use it as
     offset at logging the transaction logical timestamps.
@@ -5259,6 +5265,9 @@ bool MYSQL_BIN_LOG::open_binlog(const char *log_name,
   DBUG_RETURN(0);
 
 err:
+
+  max_cur_index_number = {0, 0};
+
 #ifdef HAVE_REPLICATION
   if (is_inited_purge_index_file())
     purge_index_entry(NULL, NULL, need_lock_index);
@@ -5835,6 +5844,8 @@ bool MYSQL_BIN_LOG::reset_logs(THD* thd, bool delete_only)
   */
   mysql_mutex_lock(&LOCK_log);
   mysql_mutex_lock(&LOCK_index);
+
+  max_cur_index_number = {0, 0};
 
   global_sid_lock->wrlock();
 
