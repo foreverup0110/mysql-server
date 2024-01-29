@@ -466,6 +466,19 @@ class MYSQL_BIN_LOG: public TC_LOG
   bool init_and_set_log_file_name(const char *log_name,
                                   const char *new_name);
   int generate_new_name(char *new_name, const char *log_name);
+  /*
+    For faster binlog rotate.
+    It is introduced so that binlog rotate need not iterate all binlog files
+    to find the next index number for the new logfile.
+
+    @first: The maximum index number used.
+    If nonzero, the next index number is curr_max_index_number.first + 1.
+
+    @second: The new maximum index number that is not yet written to @first.
+    It is updated when creating a new logfile. Note that its value is written to
+    @first only when the new logfile is successfully opened.
+  */
+  std::pair<ulong, ulong> max_cur_index_number;
 
 public:
   const char *generate_name(const char *log_name, const char *suffix,
